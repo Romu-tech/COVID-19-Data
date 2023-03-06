@@ -1,0 +1,254 @@
+---
+title: "COVID 19 Data Project"
+output:
+  github_document:
+    df_print: paged
+date: "2023-03-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+The data for Covid-19, contains information such as: region, data, number of cases, number of deaths, and the population. My primary goal, is to analyze the relationship between Covid-19 cases and deaths. Along with this, I would like to analyze the relationship of the percentage of cases and deaths based on population. I also would like to compare the cases and deaths of the US with my home state of Colorado.
+
+# Importing Data
+##### First, I will import the libraries which will be used for analysis and reporting.
+```{r}
+library(tidyverse)
+library(lubridate)
+options(warn=-1)
+```
+
+##### From here I will load Covid-19 Data from the link:  https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/ 
+
+```{r}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c('time_series_covid19_confirmed_US.csv', 'time_series_covid19_confirmed_global.csv', 
+                'time_series_covid19_deaths_US.csv', 'time_series_covid19_deaths_global.csv')
+urls <- str_c(url_in, file_names)
+US_cases <- read_csv(urls[1])
+global_cases <- read_csv(urls[2])
+US_deaths <- read_csv(urls[3])
+global_deaths <- read_csv(urls[4])
+```
+# Tidying and Transforming Data
+##### I will transfer data rows into columns for global_cases and global_deaths tables for ease of sorting.
+
+```{r}
+global_cases <- global_cases %>%
+    pivot_longer(cols = -c('Province/State',
+                           `Country/Region`, Lat, Long),
+                 names_to = 'date',
+                 values_to = 'cases') %>%
+    select(-c(Lat,Long))
+global_deaths <- global_deaths %>%
+    pivot_longer(cols = -c('Province/State',
+                           `Country/Region`, Lat, Long),
+                 names_to = 'date',
+                 values_to = 'deaths') %>%
+    select(-c(Lat,Long))
+```
+
+##### Next I will begin to join global_cases and global_deaths for more information.
+
+```{r}
+global <- global_cases %>%
+    full_join(global_deaths) %>%
+    rename(Country_Region = 'Country/Region',
+           Province_State = 'Province/State') %>%
+    mutate(date=mdy(date))
+summary(global)
+```
+
+##### The last step for global, is to select the only records where cases are greater then zero, no more, no less.This is to ensure we only view records which are useful to the analysis.
+
+```{r}
+global <- global %>% filter(cases > 0)
+summary(global)
+```
+
+##### From here, let us see what the data is showing to us and what we intend to do with the data which is shown.
+
+```{r}
+global %>% filter(cases > 28000000)
+```
+
+##### Now we repeat the same procedure as above for the US_cases and US_deaths, as this is what we are trying to locate after looking at the data above.
+
+```{r}
+US_cases <- US_cases %>%
+    pivot_longer(cols = -(UID:Combined_Key),
+                 names_to = "date",
+                 values_to = "cases") %>%
+    select(Admin2:cases) %>%
+    mutate(date = mdy(date)) %>%
+    select(-c(Lat, Long_))
+US_cases      
+US_deaths <- US_deaths %>%
+    pivot_longer(cols = -(UID:Population),
+                 names_to = "date",
+                 values_to = "deaths") %>%
+    select(Admin2:deaths) %>%
+    mutate(date = mdy(date)) %>%
+    select(-c(Lat, Long_))
+US_deaths
+US <- US_cases %>% full_join(US_deaths)
+```
+
+##### The difference between US and global is that global does not have a poplulaton column. I will add another table, which contains the population column, and add it to global table, so we have the population information for global cases and deaths. The link for said table is: "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv" for anyone interested in finding it.
+
+```{r}
+global <- global %>%
+    unite("Combined_Key",
+          c(Province_State, Country_Region),
+          sep = ", ",
+          na.rm = TRUE,
+          remove = FALSE)
+global
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_lookup_url) %>%
+    select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+global <- global %>%
+    left_join(uid, by = c("Province_State", "Country_Region")) %>%
+    select(-c(UID, FIPS)) %>%
+    select(Province_State, Country_Region, date,
+           cases, deaths, Population,
+           Combined_Key)
+global
+```
+
+# Visualizing Data
+##### It is time to visualize the data that shows number of cases and deaths per date in each country, as well as each region.
+
+```{r}
+US_by_state <- US %>%
+    group_by(Province_State, Country_Region, date) %>%
+    summarise(cases = sum(cases), deaths = sum(deaths),
+              Population = sum(Population)) %>%
+    mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+    select(Province_State, Country_Region, date,
+           cases, deaths, deaths_per_mill, Population) %>%
+    ungroup()
+US_by_state
+US_totals <- US_by_state %>%
+    group_by(Country_Region, date) %>%
+    summarise(cases = sum(cases), deaths = sum(deaths),
+              Population = sum(Population)) %>%
+    mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+    select(Country_Region, date,
+           cases, deaths, deaths_per_mill, Population) %>%
+    ungroup()
+US_totals
+tail(US_totals)
+US_totals %>%
+    ggplot(aes(x = date, y = cases)) +
+    geom_line(aes(color = "cases")) +
+    geom_point(aes(color = "cases")) +
+    geom_line(aes(y = deaths, color = "deaths")) +
+    geom_point(aes(y = deaths, color = "deaths")) +
+    scale_y_log10() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90)) +
+    labs(title = "COVID-19 in United States", y = NULL)
+```
+
+##### Next let's see the result just for the state of Colorado
+
+```{r}
+state <- "Colorado"
+US_by_state %>%
+    filter(Province_State == state) %>%
+    filter(cases > 0) %>%
+    ggplot(aes(x = date, y = cases)) +
+    geom_line(aes(color = "cases")) +
+    geom_point(aes(color = "cases")) +
+    geom_line(aes(y = deaths, color = "deaths")) +
+    geom_point(aes(y = deaths, color = "deaths")) +
+    scale_y_log10() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90)) +
+    labs(title = str_c("COVID-19 in ", state), y = NULL)
+max(US_totals$deaths)
+```
+
+# Analyzing Data
+##### Let's see the relationship between the United States Covid-19 cases and deaths.
+```{r}
+US_by_state <- US_by_state %>%
+    mutate(new_cases = cases - lag(cases),
+           new_deaths = deaths -lag(deaths))
+US_totals <- US_totals %>%
+    mutate(new_cases = cases - lag(cases),
+           new_deaths = deaths -lag(deaths))
+tail(US_totals)
+tail(US_totals %>% select(new_cases, new_deaths, everything()))
+US_totals %>%
+    ggplot(aes(x = date, y = new_cases)) +
+    geom_line(aes(color = "new_cases")) +
+    geom_point(aes(color = "new_cases")) +
+    geom_line(aes(y = new_deaths, color = "new_deaths")) +
+    geom_point(aes(y = new_deaths, color = "new_deaths")) +
+    scale_y_log10() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90)) +
+    labs(title = "COVID-19 in United States", y = NULL)
+```
+
+##### The above graph show that number of cases is proportional to number of deaths, which seems interesting.
+##### Let's see how number of cases and deaths interact with Colorado, and see if there is a correlation.
+
+```{r}
+state <- "Colorado"
+US_by_state %>%
+    filter(Province_State == state) %>%
+    filter(cases > 0) %>%
+    ggplot(aes(x = date, y = new_cases)) +
+    geom_line(aes(color = "New Cases")) +
+    geom_point(aes(color = "New Cases")) +
+    geom_line(aes(y = new_deaths, color = "New Deaths")) +
+    geom_point(aes(y = new_deaths, color = "New Deaths")) +
+    scale_y_log10() + 
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90)) +
+    labs(title = str_c("COVID-19 in ", state), y = NULL)
+US_state_totals <- US_by_state %>%
+    group_by(Province_State) %>%
+    summarise(deaths = max(deaths), cases = max(cases),
+              population = max(Population),
+              cases_per_thou = 1000 * cases / population,
+              deaths_per_thou = 1000 * deaths / population) %>%
+    filter(cases > 0, population > 0)
+US_state_totals %>%
+    slice_min(deaths_per_thou, n = 10) %>%
+select(deaths_per_thou, cases_per_thou, everything())
+US_state_totals %>%
+    slice_max(deaths_per_thou, n = 10) %>%
+select(deaths_per_thou, cases_per_thou, everything())
+```
+
+##### The result for Colorado is slightly similar to that of the United states, with the exception of less overall cases and deaths when compared to the graph of the United States from mid-2022 to 2023.
+# Modeling Data
+##### To get a better picture, it would be wise to find the correlation between deaths and cases, as well as the predictions for the deaths and cases.
+
+```{r}
+mod <- lm(deaths_per_thou ~ cases_per_thou, data = US_state_totals)
+summary(mod)
+US_state_totals %>% slice_min(cases_per_thou)
+US_state_totals %>% slice_max(cases_per_thou)
+US_state_totals %>% mutate(pred = predict(mod))
+US_tot_w_pred <- US_state_totals %>% mutate(pred = predict(mod))
+US_tot_w_pred
+US_tot_w_pred %>% ggplot() +
+    geom_point(aes(x = cases_per_thou, y = deaths_per_thou), 
+               color = "red") +
+    geom_point(aes(x = cases_per_thou, y = pred),
+               color = "green")
+```
+
+##### The graph above shows the prediction of number of deaths based on number of cases for COVID-19.
+
+# Conclusion and Bias
+The analysis above shows that the number of cases does play a primary role in the number of deaths, although some points are far away from the predictions shown. The bias of my analysis could stem from the idea that Covid-19 was a direct result of deaths. There were a lot of cases shown, where people did test positive for Covid-19, however, it is false to say that they died because of this. Many people who tested positive could've very well been in bad health before contracting Covid-19, which could've resulted in death. Since we are only looking at cases and deaths within this anaylsis, we cannot say that Covid-19 was the main cause behind these deaths, we can only assume a fair portion of deaths were caused by Covid-19. Using the above graph could also indicate a bias within the analysis, because the predictions don't necessarily line up with the actual data which was analyzed. 
